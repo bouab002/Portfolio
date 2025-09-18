@@ -1,4 +1,4 @@
-## Présentation
+## Introduction
 **Platform & Observability Engineer | DevOps / SRE**
 Experienced in building and managing scalable, secure, and reliable Kubernetes platforms. Skilled in automating CI/CD pipelines with GitLab and Helm, and implementing observability with Zabbix and Grafana. Kubernetes certified (CKA, CKS, CKAD, KCSA, KCNA) with a focus on empowering development teams, enhancing system reliability, and driving continuous infrastructure improvement.
 
