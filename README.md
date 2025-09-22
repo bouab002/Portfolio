@@ -4,7 +4,7 @@ Experienced in building and managing scalable, secure, and reliable Kubernetes p
 
 ## Projet 1- Proxmox
 * [Create Overlay network in Proxmox](Projet-1-Proxmox-Cluster/1.1_create_overlay_network_in_proxmox.md)
-* Deploy image and vms with terrafom
+* [Deploy image and vms with terrafom](Projet-1-Proxmox-Cluster/1.2_deploy_vms_and_image_using_terraform.md)
 ---
 ## Projet 2- Kubernetes Platform
 * Create a High Availability Vanilla Kubernetes Cluster
