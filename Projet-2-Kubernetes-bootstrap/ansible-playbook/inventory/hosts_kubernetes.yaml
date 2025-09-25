@@ -1,0 +1,32 @@
+all:
+  vars:
+    ansible_ssh_common_args: >-
+      -o StrictHostKeyChecking=no
+    ansible_ssh_private_key_file: /home/zidane/.ssh/id_rsa
+  children:
+    masters:
+      hosts:
+        master-0:
+          ansible_host: 1.1.1.1
+          ansible_user: ubuntu
+        master-1:
+          ansible_host: 2.2.2.2
+          ansible_user: ubuntu
+        master-2:
+          ansible_host: 3.3.3.3
+          ansible_user: ubuntu
+    workers:
+      hosts:
+        worker-0:
+          ansible_host: 4.4.4.4
+          ansible_user: ubuntu  
+        worker-1:
+          ansible_host: 5.5.5.5
+          ansible_user: ubuntu 
+        worker-2:
+          ansible_host: 6.6.6.6
+          ansible_user: ubuntu 
+    kubernetes:
+      children:
+        masters: {}
+        workers: {}

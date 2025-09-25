@@ -1,0 +1,36 @@
+---
+- name: Add OpenEBS Helm repository
+  kubernetes.core.helm_repository:
+    name: openebs
+    repo_url: https://openebs.github.io/openebs
+    state: present
+    force_update: true
+  tags:
+    - openebs
+    - helm
+
+- name: Install OpenEBS with only LocalPV enabled
+  kubernetes.core.helm:
+    name: openebs
+    chart_ref: openebs/openebs
+    kubeconfig: "{{ kubeconfig_file }}"
+    namespace: openebs
+    create_namespace: true
+    values:
+      engines:
+        local:
+          lvm:
+            enabled: false
+          zfs:
+            enabled: false
+        replicated:
+          mayastor:
+            enabled: false
+      loki:
+        enabled: false
+      alloy:
+        enabled: false
+    state: present
+  tags:
+    - openebs
+    - helm

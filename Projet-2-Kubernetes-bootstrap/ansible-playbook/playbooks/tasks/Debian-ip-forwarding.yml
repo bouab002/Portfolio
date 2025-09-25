@@ -1,0 +1,29 @@
+---
+- name: Enable IPv4 forwarding
+  become: true
+  sysctl:
+    name: net.ipv4.ip_forward
+    value: "1"
+    sysctl_file: /etc/sysctl.conf
+    reload: yes
+  
+- name: Enable IPv6 forwarding
+  sysctl:
+    name: net.ipv6.conf.all.forwarding
+    value: "1"
+    sysctl_file: /etc/sysctl.conf
+    reload: yes
+
+- name: Enable IPv6 all
+  sysctl: 
+    name: net.ipv6.conf.all.disable_ipv6
+    value: "0"
+    sysctl_file: /etc/sysctl.conf
+    reload: yes
+
+- name: Enable IPv6 default
+  sysctl:
+    name: net.ipv6.conf.default.disable_ipv6
+    value: "0"
+    sysctl_file: /etc/sysctl.conf
+    reload: yes

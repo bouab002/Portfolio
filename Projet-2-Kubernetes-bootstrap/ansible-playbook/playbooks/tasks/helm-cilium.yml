@@ -1,0 +1,34 @@
+---
+- name: Add Cilium Helm repository
+  kubernetes.core.helm_repository:
+    name: cilium
+    repo_url: https://helm.cilium.io/
+    state: present
+    force_update: true
+  tags:
+  - cilium
+  - helm
+- name: Install Cilium via Helm
+  kubernetes.core.helm:
+    name: cilium
+    chart_ref: cilium/cilium
+    release_namespace: kube-system
+    kubeconfig: "{{ kubeconfig_file }}"
+    create_namespace: false
+    chart_version: "1.17.6"
+    update_repo_cache: true
+    values:
+      ipv6:
+        enabled: true
+      bgpControlPlane:
+        enabled: true
+      kubeProxyReplacement: true
+      ingressController:
+        enabled: false
+      operator:
+        replicas: 1
+      k8sServiceHost: "{{ hostvars['master-1'].ansible_host }}"
+      k8sServicePort: "{{ load_balancer_port }}"
+  tags:
+  - cilium
+  - helm

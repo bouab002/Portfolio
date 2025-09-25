@@ -1,0 +1,46 @@
+- name: Check if /etc/resolv.conf exists
+  become: true
+  stat:
+    path: /etc/resolv.conf
+  register: resolv_stat
+
+- name: Check current attributes of /etc/resolv.conf when present
+  become: true
+  command: lsattr -d /etc/resolv.conf
+  register: resolv_attrs
+  changed_when: false
+  failed_when: false
+  when: resolv_stat.stat.exists
+
+- name: Remove immutable flag from /etc/resolv.conf if set
+  become: true
+  command: chattr -i /etc/resolv.conf
+  when: resolv_stat.stat.exists and resolv_attrs.stdout is defined and 'i' in resolv_attrs.stdout
+
+- name: Disable and stop systemd-resolved
+  become: true
+  systemd:
+    name: systemd-resolved
+    enabled: false
+    state: stopped
+
+- name: Remove existing /etc/resolv.conf
+  become: true
+  file:
+    path: /etc/resolv.conf
+    state: absent
+
+- name: Create /etc/resolv.conf with DNS servers
+  become: true
+  copy:
+    dest: /etc/resolv.conf
+    content: |
+      nameserver 1.1.1.1
+      nameserver 8.8.8.8
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Set immutable flag on /etc/resolv.conf
+  become: true
+  command: chattr +i /etc/resolv.conf

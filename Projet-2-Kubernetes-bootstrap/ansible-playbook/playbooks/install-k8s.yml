@@ -1,0 +1,162 @@
+---
+- name: Install k8s
+  hosts: all
+  become: true
+
+  tasks:
+     # DNS resolve config
+    - name: Include DNS resolve tasks
+      include_tasks: "tasks/{{ ansible_os_family }}-dns-resolve.yml"
+
+    # IP forwarding config
+    - name: Include ip forwarding tasks
+      include_tasks: "tasks/{{ ansible_os_family }}-ip-forwarding.yml"
+
+    # Upgrade OS and install required packages
+    - name: Include OS-specific tasks
+      include_tasks: "tasks/{{ ansible_os_family }}.yml"
+
+    # Install containerd and setup for k8s
+    - name: Install Containerd and setup for k8s
+      include_tasks: "tasks/{{ ansible_os_family }}-containerd.yml"
+
+    - name: Install k8s
+      include_tasks: "tasks/{{ ansible_os_family }}-k8s.yml"
+  tags: 
+  - install-k8s
+
+
+- name: Initialize the first master
+  hosts: "{{ groups['masters'][0] }}"
+  become: true
+  tasks:
+    - name: Générer le fichier de configuration kubeadm depuis le template
+      template:
+        src: templates/kubeadm-config.yaml.j2
+        dest: /tmp/kubeadm-config.yaml
+        mode: '0644'
+
+    - name: Initialisation kubeadm
+      command: kubeadm init --config=/tmp/kubeadm-config.yaml --skip-phases=addon/kube-proxy
+      args:
+        creates: /etc/kubernetes/admin.conf
+      register: kubeadm_init
+
+    - name: Créer dossier kubeconfig pour root
+      file:
+        path: ~/.kube
+        state: directory
+        mode: '0755'
+
+    - name: Copy kubeconfig
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: ~/.kube/config
+        owner: root
+        group: root
+        mode: '0644'
+        remote_src: true
+
+    - name: Extract join command
+      shell: kubeadm token create --print-join-command
+      register: join_command
+
+    - name: Extract join command for masters (with certificate key)
+      shell: |
+        echo "$(kubeadm token create --print-join-command) --control-plane --certificate-key $(kubeadm init phase upload-certs --upload-certs 2>/dev/null | grep -A 1 'Using certificate key:' | tail -n1)"
+      register: join_command_master
+
+    - name: Save join commands in global variables
+      set_fact:
+        kube_join_cmd: "{{ join_command.stdout }}"
+        kube_join_cmd_master: "{{ join_command_master.stdout }}"
+      delegate_to: localhost
+      delegate_facts: true
+      run_once: true
+      become: false
+  tags:
+  - init-k8s
+  
+- name: Join the other masters
+  hosts: "{{ groups['masters'][1:] }}"   # tous sauf le premier
+  become: true
+  serial: 1
+  tasks:
+    - name: Check if the node has already joined the cluster
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Execute join command
+      command: "{{ hostvars['localhost']['kube_join_cmd_master'] }} --apiserver-advertise-address={{ ansible_host }}"
+      when: not kubelet_conf.stat.exists
+  tags:
+  - init-k8s
+
+- name: Join the workers
+  hosts: workers
+  become: true
+  serial: 1
+  tasks:
+    - name: Vérifier si le noeud a déjà rejoint le cluster
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf
+
+    - name: Exécuter join command
+      command: "{{ hostvars['localhost']['kube_join_cmd'] }}"
+      when: not kubelet_conf.stat.exists
+  tags:
+    - init-k8s
+
+- name: Fetch admin.conf using slurp
+  hosts: "{{ groups['masters'][0] }}"
+  become: true
+  tasks:
+    - name: Slurp admin.conf
+      ansible.builtin.slurp:
+        src: /etc/kubernetes/admin.conf
+      register: kubeconfig
+
+    - name: Write admin.conf locally
+      delegate_to: localhost
+      copy:
+        dest: "{{ hostvars['localhost']['kubeconfig_file'] | default('/tmp/kubeconfig.yaml') }}"
+        content: "{{ kubeconfig.content | b64decode }}"
+      become: false
+  tags:
+  - kubeconfig
+
+- name: Install Cilium , CSI, INGRESS, NGINX, CERTMANAGER, OPENEBS
+  hosts: localhost
+  become: false
+  gather_facts: false
+  vars:
+    load_balancer_dns: "{{ hostvars[groups['masters'][0]].load_balancer_dns }}"
+    load_balancer_port: "{{ hostvars[groups['masters'][0]].load_balancer_port }}"
+  tasks:
+    - name: Install Cilium CNI
+      include_tasks: tasks/helm-cilium.yml
+      tags:
+      - cilium
+      - helm
+    
+    - name: Install Nginx Ingress
+      include_tasks: tasks/helm-nginx.yml
+      tags:
+      - nginx
+      - helm
+
+    - name: Install CertManager
+      include_tasks: tasks/helm-cert-manager.yml
+      tags:
+      - certmanager
+      - helm
+
+    - name: Install openebs Storage Class
+      include_tasks: tasks/helm-openebs.yml
+      tags:
+      - openebs
+      - helm
+  tags:
+  - helm

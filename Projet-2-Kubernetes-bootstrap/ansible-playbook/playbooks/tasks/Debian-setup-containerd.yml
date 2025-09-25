@@ -1,0 +1,26 @@
+---
+- name: Execute containerd config command and save output to file
+  ansible.builtin.command: "containerd config default"
+  register: containerd_config_output
+
+- name: Save containerd config output to file
+  ansible.builtin.copy:
+    content: "{{ containerd_config_output.stdout }}"
+    dest: /etc/containerd/config.toml
+
+- name: Enable modprobe br_netfilter
+  ansible.builtin.command: "modprobe br_netfilter"
+
+- name: Replace SystemdCgroup 
+  ansible.builtin.lineinfile:
+    path: /etc/containerd/config.toml
+    regexp: '            SystemdCgroup = false'
+    line: '            SystemdCgroup = true'
+
+
+
+
+- name: Restart containerd
+  systemd:
+      name: containerd
+      state: restarted

@@ -2,12 +2,9 @@
 **Platform & Observability Engineer | DevOps / SRE**
 Experienced in building and managing scalable, secure, and reliable Kubernetes platforms. Skilled in automating CI/CD pipelines with GitLab and Helm, and implementing observability with Zabbix and Grafana. Kubernetes certified (CKA, CKS, CKAD, KCSA, KCNA) with a focus on empowering development teams, enhancing system reliability, and driving continuous infrastructure improvement.
 
-## Projet 1- Proxmox
-* [Create Overlay network in Proxmox](Projet-1-Proxmox-Cluster/1.1_create_overlay_network_in_proxmox.md)
-* [Deploy image and vms with terrafom](Projet-1-Proxmox-Cluster/1.2_deploy_vms_and_image_using_terraform.md)
----
-## Projet 2- Kubernetes Platform
-* Create a High Availability Vanilla Kubernetes Cluster
-* Ansible playbook to install High Availability Kubernetes Cluster
-* Deploy Cilium CNI using Helm
-* Deploy Rook-ceph using Helm
+## project 1- Proxmox
+* [Create an overlay network in Proxmox to interconnect VMs across datacenters](Projet-1-Proxmox-Cluster/1.1_create_overlay_network_in_proxmox.md)
+* [Deploying an Ephemeral Ubuntu Vms with Proxmox + Terraform](Projet-1-Proxmox-Cluster/1.2_deploy_vms_and_image_using_terraform.md)
+
+## project 2- Kubernetes
+* [Install and bootstrap a hig availability Kubernetes cluster with Ansible](Projet-2-Kubernetes-bootstrap/2.1-Install-and-bootstrap-a-hight-availability-kubernetes-cluster-with-ansibme.md)

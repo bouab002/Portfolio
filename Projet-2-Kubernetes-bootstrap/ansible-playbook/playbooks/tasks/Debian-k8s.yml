@@ -1,0 +1,33 @@
+---
+- name: Download Kubernetes GPG key
+  ansible.builtin.get_url:
+    url: https://pkgs.k8s.io/core:/stable:/{{ kubernetes_version }}/deb/Release.key 
+    dest: /etc/apt/keyrings/kubernetes.asc
+    mode: '0644'
+
+- name: Deploy kubernetes source list
+  template:
+    src: kubernetes.list.j2
+    dest: /etc/apt/sources.list.d/kubernetes.list
+    owner: root
+    group: root
+    mode: 744
+
+- name: apt update
+  apt:
+    update_cache: yes
+    upgrade: 'no'
+  when: ansible_os_family == 'Debian'
+
+- name: Install  k8s
+  become: true
+  ansible.builtin.apt:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - kubelet
+    - kubeadm
+    - kubectl
+  when: ansible_os_family == 'Debian'
+    
+  
