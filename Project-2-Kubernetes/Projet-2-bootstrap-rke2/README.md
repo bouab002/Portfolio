@@ -61,7 +61,7 @@ RKE2 combines the ease of use of K3s with the security and compliance requiremen
     ┌─────▼─────┐        ┌─────▼─────┐      ┌─────▼─────┐
     │rke2-node0 │        │rke2-node1 │      │rke2-node2 │
     │ (Master)  │◄──────►│ (Master)  │◄────►│ (Master)  │
-    │44.31.84.35│        │44.31.84.36│      │44.31.84.37│
+    │192.168.2.35│        │192.168.2.36│      │192.168.2.37│
     └───────────┘        └───────────┘      └───────────┘
           │                    │                    │
           └────────────────────┼────────────────────┘
@@ -71,7 +71,7 @@ RKE2 combines the ease of use of K3s with the security and compliance requiremen
     ┌─────▼─────┐        ┌─────▼─────┐      ┌─────▼─────┐
     │rke2-node3 │        │rke2-node4 │      │rke2-node5 │
     │ (Worker)  │        │ (Worker)  │      │ (Worker)  │
-    │44.31.84.38│        │44.31.84.39│      │44.31.84.40│
+    │192.168.2.38│        │192.168.2.39│      │192.168.2.40│
     └───────────┘        └───────────┘      └───────────┘
 ```
 
@@ -661,7 +661,7 @@ operator:
 
 **Symptoms:**
 ```
-error="dial tcp 44.31.84.35:9345: connect: connection refused"
+error="dial tcp 192.168.2.35:9345: connect: connection refused"
 ```
 
 **Causes:**
@@ -812,19 +812,19 @@ all:
     masters:
       hosts:
         rke2-node0:
-          ansible_host: 44.31.84.35
+          ansible_host: 192.168.2.35
         rke2-node1:
-          ansible_host: 44.31.84.36
+          ansible_host: 192.168.2.36
         rke2-node2:
-          ansible_host: 44.31.84.37
+          ansible_host: 192.168.2.37
     workers:
       hosts:
         rke2-node3:
-          ansible_host: 44.31.84.38
+          ansible_host: 192.168.2.38
         rke2-node4:
-          ansible_host: 44.31.84.39
+          ansible_host: 192.168.2.39
         rke2-node5:
-          ansible_host: 44.31.84.40
+          ansible_host: 192.168.2.40
 ```
 
 ### Step 2: Configure Variables
@@ -859,7 +859,7 @@ ansible-playbook -i inventory/rke2-cluster.yaml check-cluster.yaml
 
 ```bash
 # Copy kubeconfig from master
-scp ubuntu@44.31.84.35:/etc/rancher/rke2/rke2.yaml ~/.kube/config
+scp ubuntu@192.168.2.35:/etc/rancher/rke2/rke2.yaml ~/.kube/config
 
 # Update server address
 sed -i 's/127.0.0.1/rke2.as208529.net.eu.org/g' ~/.kube/config
