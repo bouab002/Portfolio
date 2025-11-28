@@ -1,0 +1,6 @@
+---
+- name: Mise à jour du système debian
+  apt:
+    update_cache: yes
+    upgrade: 'yes'
+  when: ansible_os_family == 'Debian'

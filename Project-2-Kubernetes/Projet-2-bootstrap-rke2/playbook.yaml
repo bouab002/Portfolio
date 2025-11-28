@@ -1,0 +1,247 @@
+# rke2-rancher.yml
+- name: Préparer machines (swap, modules, sysctl, packages)
+  hosts: all
+  become: true
+  vars:
+    required_pkgs_apt: [curl, ca-certificates, apt-transport-https, gnupg, jq]
+    required_pkgs_yum: [curl, yum-utils, jq]
+  tasks:
+    - name: Désactiver swap (temporaire)
+      ansible.builtin.command: swapoff -a
+
+    - name: Commenter les lignes swap dans /etc/fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '(^.*\sswap\s.*$)'
+        replace: '# \\1'
+        backup: yes
+
+    - name: Charger modules overlay et br_netfilter
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/rke2.conf
+        content: |
+          overlay
+          br_netfilter
+      notify: reload-modules
+
+    - name: Appliquer sysctl requis pour k8s
+      ansible.builtin.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop:
+        - { name: 'net.bridge.bridge-nf-call-iptables', value: 1 }
+        - { name: 'net.bridge.bridge-nf-call-ip6tables', value: 1 }
+        - { name: 'net.ipv4.ip_forward', value: 1 }
+        - { name: 'net.ipv4.conf.all.forwarding', value: 1 }
+        - { name: 'net.ipv6.conf.all.forwarding', value: 1 }
+        - { name: 'net.ipv4.conf.all.rp_filter', value: 0 }
+        - { name: 'net.ipv4.conf.default.rp_filter', value: 0 }
+
+    - name: Installer paquets requis (Debian/Ubuntu)
+      ansible.builtin.apt:
+        name: "{{ required_pkgs_apt }}"
+        state: present
+        update_cache: yes
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Installer paquets requis (RHEL/CentOS)
+      ansible.builtin.yum:
+        name: "{{ required_pkgs_yum }}"
+        state: present
+      when: ansible_facts['os_family'] == 'RedHat'
+
+  handlers:
+    - name: reload-modules
+      ansible.builtin.command: modprobe br_netfilter || true
+      listen: reload-modules
+
+- name: Installer RKE2 serveur (first servers group)
+  hosts: rke2_servers
+  become: true
+  vars:
+    rke2_install_url: "https://get.rke2.io"
+  tasks:
+    - name: Créer dossier config rke2
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: '0755'
+
+    - name: Déployer config.yaml pour server
+      ansible.builtin.template:
+        src: templates/rke2-server-config.yaml.j2
+        dest: /etc/rancher/rke2/config.yaml
+        owner: root
+        group: root
+        mode: '0644'
+      vars:
+        rke2_token: "{{ rke2_token }}"
+        tls_sans: "{{ rke2_tls_sans | default([]) }}"
+
+    - name: Installer rke2-server via script officiel
+      ansible.builtin.shell: "curl -sfL {{ rke2_install_url }} | sh -"
+      args:
+        executable: /bin/bash
+      register: rke2_install
+      changed_when: "'installed' in rke2_install.stdout or rke2_install.rc == 0"
+
+    - name: Activer et démarrer rke2-server
+      ansible.builtin.service:
+        name: rke2-server
+        state: started
+        enabled: yes
+
+    - name: Attendre l'API Kubernetes (port 6443)
+      ansible.builtin.wait_for:
+        port: 6443
+        host: "{{ inventory_hostname }}"
+        timeout: 600
+
+- name: Installer RKE2 agent (workers)
+  hosts: rke2_agents
+  become: true
+  vars:
+    rke2_install_url: "https://get.rke2.io"
+  tasks:
+    - name: Créer dossier config rke2
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: '0755'
+
+    - name: Déployer config.yaml agent (server endpoint + token)
+      ansible.builtin.template:
+        src: templates/rke2-agent-config.yaml.j2
+        dest: /etc/rancher/rke2/config.yaml
+        mode: '0644'
+      vars:
+        server_url: "https://{{ rke2_api_endpoint }}:9345"
+        rke2_token: "{{ rke2_token }}"
+
+    - name: Installer rke2-agent via script officiel
+      ansible.builtin.shell: "curl -sfL {{ rke2_install_url }} | INSTALL_RKE2_TYPE='agent' sh -"
+      args:
+        executable: /bin/bash
+
+    - name: Activer et démarrer rke2-agent
+      ansible.builtin.service:
+        name: rke2-agent
+        state: started
+        enabled: yes
+
+- name: Récupérer kubeconfig depuis un server et installer Rancher (helm)
+  hosts: rke2_servers[0]   # fetch depuis 1er server
+  gather_facts: false
+  tasks:
+    - name: Fetch kubeconfig depuis le server
+      ansible.builtin.fetch:
+        src: /etc/rancher/rke2/rke2.yaml
+        dest: "{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        flat: yes
+
+    - name: Remplacer l'endpoint local par l'endpoint public dans kubeconfig (sur contrôleur)
+      delegate_to: localhost
+      ansible.builtin.replace:
+        path: "{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        regexp: 'server: https://127.0.0.1:6443'
+        replace: "server: https://{{ rke2_api_endpoint }}:6443"
+
+    - name: Installer helm (si absent) sur le contrôleur
+      delegate_to: localhost
+      ansible.builtin.command: |
+        bash -lc 'command -v helm >/dev/null || (curl -fsSL https://get.helm.sh/helm-v3.11.0-linux-amd64.tar.gz -o /tmp/helm.tgz && tar zxvf /tmp/helm.tgz -C /tmp && sudo mv /tmp/linux-amd64/helm /usr/local/bin/helm)'
+      changed_when: false
+
+    - name: Ajouter repo jetstack (cert-manager) et rancher
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        helm repo add jetstack https://charts.jetstack.io || true
+        helm repo add rancher-latest https://releases.rancher.com/server-charts/latest || true
+        helm repo update
+      args:
+        executable: /bin/bash
+
+    - name: Ajouter repo Cilium
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        helm repo add cilium https://helm.cilium.io || true
+        helm repo update
+      args:
+        executable: /bin/bash
+
+    - name: Installer Cilium (kube-proxy replacement strict, Hubble, BGP)
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        kubectl -n kube-system create secret generic cilium-apiserver || true
+        helm upgrade --install cilium cilium/cilium \
+          --namespace kube-system \
+          --set kubeProxyReplacement=strict \
+          --set k8sServiceHost={{ rke2_api_endpoint }} \
+          --set k8sServicePort=6443 \
+          --set hubble.enabled=true \
+          --set hubble.relay.enabled=true \
+          --set hubble.ui.enabled=true \
+          --set bgpControlPlane.enabled=true \
+          --set ipam.mode=kubernetes \
+          --wait --timeout 15m
+      args:
+        executable: /bin/bash
+
+    - name: Créer répertoire manifests local
+      delegate_to: localhost
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/manifests"
+        state: directory
+        mode: '0755'
+
+    - name: Générer la CiliumBGPPeeringPolicy depuis template
+      delegate_to: localhost
+      ansible.builtin.template:
+        src: templates/cilium-bgp-policy.yaml.j2
+        dest: "{{ playbook_dir }}/manifests/cilium-bgp-policy.yaml"
+        mode: '0644'
+
+    - name: Appliquer la CiliumBGPPeeringPolicy
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        kubectl apply -f "{{ playbook_dir }}/manifests/cilium-bgp-policy.yaml"
+      args:
+        executable: /bin/bash
+
+    - name: Installer cert-manager (CRDs + chart)
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f -
+        helm install cert-manager jetstack/cert-manager \
+          --namespace cert-manager \
+          --set installCRDs=true \
+          --wait --timeout 10m
+      args:
+        executable: /bin/bash
+
+    - name: Créer namespace cattle-system
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        kubectl create namespace cattle-system --dry-run=client -o yaml | kubectl apply -f -
+      args:
+        executable: /bin/bash
+
+    - name: Installer Rancher (Helm)
+      delegate_to: localhost
+      ansible.builtin.shell: |
+        export KUBECONFIG="{{ playbook_dir }}/kubeconfigs/rke2.yaml"
+        helm install rancher rancher-latest/rancher \
+          --namespace cattle-system \
+          --set hostname={{ rancher_hostname }} \
+          --set replicas=3 \
+          --wait --timeout 15m
+      args:
+        executable: /bin/bash

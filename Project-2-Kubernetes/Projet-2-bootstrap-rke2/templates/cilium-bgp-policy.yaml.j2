@@ -1,0 +1,22 @@
+apiVersion: cilium.io/v2alpha1
+kind: CiliumBGPPeeringPolicy
+metadata:
+  name: default-bgp-policy
+spec:
+  # Apply to all nodes by default; override via vars if needed
+  nodeSelector:
+    matchLabels: {{ cilium_bgp_node_selector | default({}) | to_nice_yaml(indent=6) | trim }}
+  virtualRouters:
+    - localASN: {{ cilium_bgp_local_asn | default(64512) }}
+      exportPodCIDR: {{ cilium_bgp_export_pod_cidr | default(true) | tojson }}
+      serviceSelector:
+        matchLabels: {{ cilium_bgp_service_selector | default({}) | to_nice_yaml(indent=10) | trim }}
+      neighbors:
+{% for n in (cilium_bgp_neighbors | default([])) %}
+        - peerAddress: "{{ n.address }}{{ '/32' if '/' not in n.address else '' }}"
+          peerASN: {{ n.asn }}
+          connectRetryTimeSeconds: {{ n.connectRetry | default(120) }}
+          holdTimeSeconds: {{ n.holdTime | default(900) }}
+          keepAliveTimeSeconds: {{ n.keepAlive | default(300) }}
+{% endfor %}
+

@@ -1,0 +1,25 @@
+# RKE2 server configuration for use with external CNI (Cilium)
+# Disable Canal and kube-proxy and set CNI to none
+
+token: "{{ rke2_token }}"
+
+# Optional SANs for API server certificate (e.g., LB DNS/IP)
+{% if tls_sans is defined and tls_sans %}
+tls-san:
+{% for san in tls_sans %}
+  - "{{ san }}"
+{% endfor %}
+{% endif %}
+
+write-kubeconfig-mode: "0644"
+
+# Do not install built-in CNI; we will install Cilium via Helm
+cni: none
+
+# Disable Canal addon entirely
+disable:
+  - rke2-canal
+
+# Prevent kube-proxy deployment; Cilium will replace it (eBPF)
+disable-kube-proxy: true
+

@@ -1,0 +1,12 @@
+---
+# First master node IP
+master_node_ip: "192.0.2.33"
+# Load balancer DNS
+load_balancer_dns: "prod.as208529.net.eu.org"
+# Load balancer port
+load_balancer_port: "6443"
+# Service CIDR
+service_cidr: "10.96.0.0/12,fd00:1234::/108"
+# Pod CIDR
+pod_cidr: "192.168.0.0/16,fd00:5678::/64"
+

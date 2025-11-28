@@ -1,0 +1,55 @@
+# rke2-pre-request.yaml
+---
+- name: set required packages variables
+  ansible.builtin.set_fact:
+    required_pkgs_apt: [curl, ca-certificates, apt-transport-https, gnupg, jq]
+    required_pkgs_yum: [curl, yum-utils, jq]
+
+- name: disable swap (temporary)
+  ansible.builtin.command: swapoff -a
+
+- name: comment swap lines in /etc/fstab
+  ansible.builtin.replace:
+    path: /etc/fstab
+    regexp: '(^.*\sswap\s.*$)'
+    replace: '# \\1'
+    backup: yes
+
+- name: load modules overlay and br_netfilter
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/rke2.conf
+    content: |
+      overlay
+      br_netfilter
+
+- name: reload kernel modules
+  ansible.builtin.command: modprobe br_netfilter
+  ignore_errors: true
+
+- name: apply sysctl required for k8s
+  ansible.builtin.sysctl:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    state: present
+    reload: yes
+  loop:
+    - { name: 'net.bridge.bridge-nf-call-iptables', value: 1 }
+    - { name: 'net.bridge.bridge-nf-call-ip6tables', value: 1 }
+    - { name: 'net.ipv4.ip_forward', value: 1 }
+    - { name: 'net.ipv4.conf.all.forwarding', value: 1 }
+    - { name: 'net.ipv6.conf.all.forwarding', value: 1 }
+    - { name: 'net.ipv4.conf.all.rp_filter', value: 0 }
+    - { name: 'net.ipv4.conf.default.rp_filter', value: 0 }
+
+- name: install required packages (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name: "{{ required_pkgs_apt }}"
+    state: present
+    update_cache: yes
+  when: ansible_facts['os_family'] == 'Debian'
+
+- name: install required packages (RHEL/CentOS)
+  ansible.builtin.yum:
+    name: "{{ required_pkgs_yum }}"
+    state: present
+  when: ansible_facts['os_family'] == 'RedHat'

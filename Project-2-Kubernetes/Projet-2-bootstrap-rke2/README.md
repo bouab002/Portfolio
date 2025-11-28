@@ -1,0 +1,927 @@
+# RKE2 Kubernetes Cluster Installation with Ansible
+
+## Table of Contents
+1. [Introduction](#introduction)
+2. [Architecture Overview](#architecture-overview)
+3. [Prerequisites](#prerequisites)
+4. [Preparing the Ubuntu System](#preparing-the-ubuntu-system)
+5. [Installing RKE2 Server Nodes](#installing-rke2-server-nodes)
+6. [Joining Worker Nodes](#joining-worker-nodes)
+7. [Configuring Cilium CNI](#configuring-cilium-cni)
+8. [Cluster Verification](#cluster-verification)
+9. [Troubleshooting](#troubleshooting)
+
+---
+
+## 1. Introduction
+
+### Project Overview
+
+This project demonstrates the automated deployment of a production-ready Kubernetes cluster using **RKE2 (Rancher Kubernetes Engine 2)** on Ubuntu 24.04 LTS. RKE2 is a fully conformant Kubernetes distribution that focuses on security and compliance within the U.S. Federal Government sector.
+
+Key features of this deployment:
+- **High Availability**: 3 control-plane nodes with embedded etcd
+- **Cilium CNI**: Advanced networking with eBPF-based kube-proxy replacement
+- **Dual-Stack**: Full IPv4/IPv6 support
+- **Automation**: Complete Ansible-based deployment
+- **Security**: SELinux/AppArmor compatible, CIS hardened
+
+### Objectives
+
+This project aims to demonstrate:
+- Production-grade Kubernetes cluster installation
+- Infrastructure as Code (IaC) with Ansible
+- High-availability cluster architecture
+- Advanced CNI configuration (Cilium with eBPF)
+- DevOps best practices for cluster management
+
+### Why RKE2?
+
+RKE2 combines the ease of use of K3s with the security and compliance requirements of enterprise environments:
+- **Security-focused**: Compliant with FIPS 140-2 and CIS Kubernetes Benchmark
+- **Simple deployment**: Single binary installation
+- **Production-ready**: Battle-tested in enterprise environments
+- **CNI flexibility**: Support for multiple CNI plugins
+
+---
+
+## 2. Architecture Overview
+
+### Cluster Topology
+
+```
+                    ┌─────────────────────┐
+                    │   Load Balancer     │
+                    │ rke2.as208529.net   │
+                    │   (DNS Round-Robin) │
+                    └──────────┬──────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          │                    │                    │
+    ┌─────▼─────┐        ┌─────▼─────┐      ┌─────▼─────┐
+    │rke2-node0 │        │rke2-node1 │      │rke2-node2 │
+    │ (Master)  │◄──────►│ (Master)  │◄────►│ (Master)  │
+    │44.31.84.35│        │44.31.84.36│      │44.31.84.37│
+    └───────────┘        └───────────┘      └───────────┘
+          │                    │                    │
+          └────────────────────┼────────────────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          │                    │                    │
+    ┌─────▼─────┐        ┌─────▼─────┐      ┌─────▼─────┐
+    │rke2-node3 │        │rke2-node4 │      │rke2-node5 │
+    │ (Worker)  │        │ (Worker)  │      │ (Worker)  │
+    │44.31.84.38│        │44.31.84.39│      │44.31.84.40│
+    └───────────┘        └───────────┘      └───────────┘
+```
+
+### Components
+
+| Component | Description | Count |
+|-----------|-------------|-------|
+| **RKE2 Server** | Control-plane + etcd | 3 nodes |
+| **RKE2 Agent** | Worker nodes | 3 nodes |
+| **Cilium CNI** | Network plugin with eBPF | All nodes |
+| **CoreDNS** | Cluster DNS | 2 replicas |
+| **Metrics Server** | Resource metrics | 1 replica |
+
+### Network Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| **Pod CIDR (IPv4)** | 192.168.0.0/16 |
+| **Pod CIDR (IPv6)** | fd00:5678::/64 |
+| **Service CIDR (IPv4)** | 10.96.0.0/12 |
+| **Service CIDR (IPv6)** | fd00:1234::/108 |
+| **CNI** | Cilium 1.18.x |
+| **Tunnel Protocol** | VXLAN |
+| **Kube-proxy** | Replaced by Cilium eBPF |
+
+### Ports Used
+
+| Port | Protocol | Purpose | Direction |
+|------|----------|---------|-----------|
+| 6443 | TCP | Kubernetes API | Inbound |
+| 9345 | TCP | RKE2 Supervisor API | Inbound |
+| 10250 | TCP | Kubelet API | Inbound |
+| 2379-2380 | TCP | etcd | Between masters |
+| 8472 | UDP | VXLAN (Cilium) | Between nodes |
+
+---
+
+## 3. Prerequisites
+
+### System Requirements
+
+**Operating System:**
+- Ubuntu 24.04 LTS (Kernel 6.8.0-87-generic or later)
+- Minimum kernel version: 5.8 (for eBPF features)
+
+**Hardware Requirements (per node):**
+
+| Node Type | CPU | RAM | Disk |
+|-----------|-----|-----|------|
+| Master | 2 cores | 4 GB | 50 GB |
+| Worker | 2 cores | 4 GB | 50 GB |
+
+**Network Requirements:**
+- Stable network connectivity between all nodes
+- DNS resolution working correctly
+- SSH access to all nodes
+- Firewall rules allowing RKE2 ports
+
+### Software Prerequisites
+
+On your local machine (Ansible control node):
+```bash
+# Ansible 2.17+
+ansible --version
+
+# SSH key-based authentication configured
+ssh-add ~/.ssh/id_rsa
+
+# Python 3.8+
+python3 --version
+```
+
+### Knowledge Prerequisites
+
+- Basic Linux system administration
+- Understanding of Kubernetes concepts
+- Familiarity with YAML and Ansible
+- Basic networking knowledge (CIDR, DNS, routing)
+
+---
+
+## 4. Preparing the Ubuntu System
+
+### 4.1 System Updates
+
+All nodes must be updated before installation:
+
+```yaml
+# tasks/system-update.yaml
+- name: Update apt cache
+  ansible.builtin.apt:
+    update_cache: yes
+    cache_valid_time: 3600
+
+- name: Upgrade all packages
+  ansible.builtin.apt:
+    upgrade: dist
+    autoremove: yes
+```
+
+### 4.2 DNS Configuration
+
+Configure DNS resolver for proper name resolution:
+
+```yaml
+# tasks/dns-resolver-configuration.yaml
+- name: Configure systemd-resolved
+  ansible.builtin.template:
+    src: templates/resolved.conf.j2
+    dest: /etc/systemd/resolved.conf
+  notify: restart systemd-resolved
+
+- name: Ensure /etc/hosts has localhost entry
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "127.0.0.1 localhost"
+    state: present
+```
+
+### 4.3 System Prerequisites
+
+```yaml
+# tasks/rke2-pre-request.yaml
+- name: Enable IPv4 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    state: present
+    reload: yes
+
+- name: Enable IPv6 forwarding
+  ansible.posix.sysctl:
+    name: net.ipv6.conf.all.forwarding
+    value: '1'
+    state: present
+    reload: yes
+
+- name: Disable swap
+  ansible.builtin.shell: |
+    swapoff -a
+    sed -i '/swap/d' /etc/fstab
+```
+
+### 4.4 Firewall Configuration
+
+For Ubuntu with UFW:
+```bash
+# Allow RKE2 ports
+sudo ufw allow 6443/tcp    # Kubernetes API
+sudo ufw allow 9345/tcp    # RKE2 Supervisor
+sudo ufw allow 10250/tcp   # Kubelet
+sudo ufw allow 8472/udp    # VXLAN
+sudo ufw allow 2379:2380/tcp  # etcd (masters only)
+```
+
+---
+
+## 5. Installing RKE2 Server Nodes
+
+### 5.1 Installation Strategy
+
+The installation follows a sequential approach:
+1. **First master node**: Initializes the cluster and generates the join token
+2. **Additional master nodes**: Join the cluster one by one (serial: 1)
+3. **Worker nodes**: Join the cluster after all masters are ready
+
+### 5.2 First Master Node Installation
+
+```yaml
+# rke2-install-playbook.yaml (excerpt)
+- name: Install first RKE2 master node
+  hosts: masters[0]
+  become: true
+  tasks:
+    - name: Create RKE2 config directory
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: '0755'
+
+    - name: Deploy RKE2 server configuration
+      ansible.builtin.template:
+        src: templates/rke2-server-config.yaml.j2
+        dest: /etc/rancher/rke2/config.yaml
+        mode: '0644'
+
+    - name: Install RKE2 server
+      ansible.builtin.shell: |
+        curl -sfL https://get.rke2.io | sh -
+      args:
+        executable: /bin/bash
+
+    - name: Start RKE2 server
+      ansible.builtin.service:
+        name: rke2-server
+        state: started
+        enabled: yes
+
+    - name: Wait for Kubernetes API
+      ansible.builtin.wait_for:
+        port: 6443
+        timeout: 600
+
+    - name: Retrieve cluster token
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/rke2/server/node-token
+      register: rke2_token_file
+
+    - name: Store token for other nodes
+      ansible.builtin.set_fact:
+        rke2_cluster_token: "{{ rke2_token_file.content | b64decode | trim }}"
+```
+
+### 5.3 RKE2 Server Configuration
+
+```yaml
+# templates/rke2-server-config.yaml.j2
+# RKE2 server configuration with Cilium CNI
+
+# Use Cilium as CNI (bundled with RKE2)
+cni: cilium
+
+# Disable Canal addon (default CNI)
+disable:
+  - rke2-canal
+
+# Disable kube-proxy - Cilium will replace it with eBPF
+disable-kube-proxy: true
+
+# Dual-stack configuration
+cluster-cidr: "192.168.0.0/16,fd00:5678::/64"
+service-cidr: "10.96.0.0/12,fd00:1234::/108"
+
+# API server certificate SANs
+tls-san:
+  - "rke2.as208529.net.eu.org"
+  - "{{ ansible_host }}"
+
+write-kubeconfig-mode: "0644"
+```
+
+### 5.4 Additional Master Nodes
+
+```yaml
+- name: Install additional master nodes
+  hosts: masters[1:]
+  become: true
+  serial: 1  # One at a time
+  vars:
+    server_url: "https://{{ load_balancer_dns }}:9345"
+  tasks:
+    - name: Deploy server configuration
+      ansible.builtin.template:
+        src: templates/rke2-server-config.yaml.j2
+        dest: /etc/rancher/rke2/config.yaml
+      vars:
+        is_first_server: false
+        server_url: "{{ server_url }}"
+        rke2_token: "{{ hostvars[inventory_hostname]['rke2_token'] }}"
+
+    - name: Install and start RKE2 server
+      # ... similar to first master
+```
+
+**Key configuration for joining masters:**
+```yaml
+# Additional to base config
+server: "https://rke2.as208529.net.eu.org:9345"
+token: "{{ rke2_cluster_token }}"
+```
+
+---
+
+## 6. Joining Worker Nodes
+
+### 6.1 Worker Node Configuration
+
+```yaml
+# templates/rke2-agent-config.yaml.j2
+# RKE2 agent configuration
+server: "https://{{ load_balancer_dns }}:9345"
+token: "{{ rke2_token }}"
+```
+
+### 6.2 Worker Installation Process
+
+```yaml
+- name: Install RKE2 worker nodes
+  hosts: workers
+  become: true
+  serial: 1  # Install one by one
+  vars:
+    server_url: "https://{{ load_balancer_dns }}:9345"
+  tasks:
+    - name: Create RKE2 config directory
+      ansible.builtin.file:
+        path: /etc/rancher/rke2
+        state: directory
+        mode: '0755'
+
+    - name: Deploy agent configuration
+      ansible.builtin.template:
+        src: templates/rke2-agent-config.yaml.j2
+        dest: /etc/rancher/rke2/config.yaml
+      vars:
+        rke2_token: "{{ hostvars[inventory_hostname]['rke2_token'] }}"
+
+    - name: Install RKE2 agent
+      ansible.builtin.shell: |
+        curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE='agent' sh -
+
+    - name: Start RKE2 agent
+      ansible.builtin.service:
+        name: rke2-agent
+        state: started
+        enabled: yes
+```
+
+### 6.3 Important Notes
+
+**Port Configuration:**
+- Workers connect to **port 9345** (Supervisor API), NOT port 6443
+- Port 6443 is only for Kubernetes API access (kubectl)
+
+**Load Balancer:**
+- Use DNS round-robin or a proper load balancer pointing to all master nodes
+- Format: `https://load-balancer-dns:9345`
+
+---
+
+## 7. Configuring Cilium CNI
+
+### 7.1 Why Cilium?
+
+Cilium provides advanced networking capabilities:
+- **eBPF-based**: Kernel-level networking for high performance
+- **Kube-proxy replacement**: No iptables overhead
+- **Dual-stack support**: Native IPv4/IPv6
+- **Hubble**: Built-in observability
+- **Security**: Network policies and encryption
+
+### 7.2 Cilium Configuration
+
+```yaml
+# templates/rke2-cilium-config.yaml.j2
+---
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: rke2-cilium
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    # Kube-proxy replacement with eBPF
+    kubeProxyReplacement: true
+    k8sServiceHost: "rke2.as208529.net.eu.org"
+    k8sServicePort: "6443"
+    
+    # Dual-stack IPv4/IPv6
+    ipv4:
+      enabled: true
+    ipv6:
+      enabled: true
+    
+    # IPAM configuration - cluster-pool mode
+    ipam:
+      mode: cluster-pool
+    
+    # VXLAN tunneling
+    tunnelProtocol: vxlan
+    
+    # Hubble observability
+    hubble:
+      enabled: true
+      relay:
+        enabled: true
+      ui:
+        enabled: true
+    
+    # eBPF optimizations
+    bpf:
+      masquerade: true
+      tproxy: true
+    
+    # Operator configuration
+    operator:
+      replicas: 1
+      clusterPoolIPv4PodCIDRList:
+        - "192.168.0.0/16"
+      clusterPoolIPv6PodCIDRList:
+        - "fd00:5678::/64"
+```
+
+### 7.3 Deployment Location
+
+The HelmChartConfig must be placed in:
+```
+/var/lib/rancher/rke2/server/manifests/rke2-cilium-config.yaml
+```
+
+RKE2 automatically applies manifests from this directory.
+
+### 7.4 Key Configuration Parameters
+
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `kubeProxyReplacement` | `true` | Replace kube-proxy with eBPF |
+| `ipam.mode` | `cluster-pool` | Cilium manages IP allocation |
+| `tunnelProtocol` | `vxlan` | Overlay network encapsulation |
+| `k8sServiceHost` | Load balancer DNS | Cilium connects to API |
+
+### 7.5 IPAM Mode Explanation
+
+**Why `cluster-pool` instead of `kubernetes`?**
+
+- With `disable-kube-proxy: true`, Kubernetes doesn't allocate PodCIDRs automatically
+- `cluster-pool` mode: Cilium operator manages IP allocation
+- Must specify CIDR ranges in `clusterPoolIPv4PodCIDRList`
+
+**Common error with `kubernetes` mode:**
+```
+level=warn msg="Waiting for k8s node information" error="required IPv4 PodCIDR not available"
+```
+
+**Solution:** Use `cluster-pool` mode with explicit CIDR configuration.
+
+---
+
+## 8. Cluster Verification
+
+### 8.1 Checking Node Status
+
+```bash
+# On any master node
+export KUBECONFIG=/etc/rancher/rke2/rke2.yaml
+
+# Check all nodes
+kubectl get nodes -o wide
+
+# Expected output:
+NAME         STATUS   ROLES                       AGE   VERSION
+rke2-node0   Ready    control-plane,etcd,master   30m   v1.33.6+rke2r1
+rke2-node1   Ready    control-plane,etcd,master   28m   v1.33.6+rke2r1
+rke2-node2   Ready    control-plane,etcd,master   26m   v1.33.6+rke2r1
+rke2-node3   Ready    <none>                      24m   v1.33.6+rke2r1
+rke2-node4   Ready    <none>                      22m   v1.33.6+rke2r1
+rke2-node5   Ready    <none>                      20m   v1.33.6+rke2r1
+```
+
+### 8.2 Verifying Cilium
+
+```bash
+# Check Cilium pods
+kubectl get pods -n kube-system -l k8s-app=cilium
+
+# Expected: One cilium pod per node, all Running
+NAME           READY   STATUS    RESTARTS   AGE
+cilium-xxxxx   1/1     Running   0          15m
+cilium-yyyyy   1/1     Running   0          15m
+# ... (6 pods total)
+
+# Check Cilium operator
+kubectl get pods -n kube-system -l name=cilium-operator
+
+# Check Hubble relay
+kubectl get pods -n kube-system -l k8s-app=hubble-relay
+```
+
+### 8.3 Verifying Network Connectivity
+
+```bash
+# Deploy test pods
+kubectl run test-1 --image=nicolaka/netshoot --rm -it -- /bin/bash
+kubectl run test-2 --image=nicolaka/netshoot --rm -it -- /bin/bash
+
+# From test-1, ping test-2
+ping <test-2-pod-ip>
+
+# Test DNS
+nslookup kubernetes.default.svc.cluster.local
+```
+
+### 8.4 Checking System Pods
+
+```bash
+# All kube-system pods
+kubectl get pods -n kube-system -o wide
+
+# Key components to verify:
+# - cilium (6 pods)
+# - cilium-operator (1 pod)
+# - coredns (2 pods)
+# - metrics-server (1 pod)
+```
+
+### 8.5 Ansible Verification Playbook
+
+```yaml
+# check-cluster.yaml
+- name: Verify RKE2 cluster status
+  hosts: masters[0]
+  become: true
+  tasks:
+    - name: Get all nodes
+      ansible.builtin.shell: |
+        /var/lib/rancher/rke2/bin/kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      register: nodes
+
+    - name: Display nodes
+      ansible.builtin.debug:
+        msg: "{{ nodes.stdout_lines }}"
+
+    - name: Get Cilium pods
+      ansible.builtin.shell: |
+        /var/lib/rancher/rke2/bin/kubectl get pods -n kube-system -l k8s-app=cilium
+      environment:
+        KUBECONFIG: /etc/rancher/rke2/rke2.yaml
+      register: cilium
+
+    - name: Display Cilium status
+      ansible.builtin.debug:
+        msg: "{{ cilium.stdout_lines }}"
+```
+
+Run with:
+```bash
+ansible-playbook -i inventory/rke2-cluster.yaml check-cluster.yaml
+```
+
+---
+
+## 9. Troubleshooting
+
+### 9.1 Common Issues
+
+#### Issue 1: Nodes Not Ready
+
+**Symptoms:**
+```
+NAME       STATUS     ROLES    AGE
+node-1     NotReady   master   5m
+```
+
+**Causes:**
+- CNI not running
+- Network connectivity issues
+- Cilium pods in CrashLoopBackOff
+
+**Solution:**
+```bash
+# Check Cilium status
+kubectl get pods -n kube-system -l k8s-app=cilium
+
+# Check logs
+kubectl logs -n kube-system <cilium-pod> --previous
+
+# Common fix: Restart Cilium
+kubectl rollout restart daemonset/cilium -n kube-system
+```
+
+#### Issue 2: Cilium "PodCIDR not available" Error
+
+**Symptoms:**
+```
+level=warn msg="Waiting for k8s node information" error="required IPv4 PodCIDR not available"
+```
+
+**Cause:**
+- Using `ipam.mode: kubernetes` with `disable-kube-proxy: true`
+
+**Solution:**
+Change to `cluster-pool` mode in `rke2-cilium-config.yaml`:
+```yaml
+ipam:
+  mode: cluster-pool
+
+operator:
+  clusterPoolIPv4PodCIDRList:
+    - "192.168.0.0/16"
+  clusterPoolIPv6PodCIDRList:
+    - "fd00:5678::/64"
+```
+
+#### Issue 3: Worker Agent Connection Refused
+
+**Symptoms:**
+```
+error="dial tcp 44.31.84.35:9345: connect: connection refused"
+```
+
+**Causes:**
+- Worker trying to connect to port 6443 instead of 9345
+- Master node firewall blocking port 9345
+- RKE2 server not fully started
+
+**Solution:**
+1. Verify worker config uses port 9345:
+```yaml
+server: "https://load-balancer:9345"  # NOT 6443
+```
+
+2. Check firewall:
+```bash
+sudo ufw allow 9345/tcp
+```
+
+3. Verify master is listening:
+```bash
+sudo ss -tlnp | grep 9345
+```
+
+#### Issue 4: Invalid k8sServiceHost
+
+**Symptoms:**
+```
+Cilium pods crash immediately after start
+```
+
+**Cause:**
+Invalid IP in `k8sServiceHost` (e.g., `172.0.0.1`)
+
+**Solution:**
+Use load balancer DNS in `rke2-cilium-config.yaml`:
+```yaml
+k8sServiceHost: "rke2.as208529.net.eu.org"  # NOT an IP
+k8sServicePort: "6443"
+```
+
+### 9.2 Useful Commands
+
+```bash
+# Check RKE2 server status
+sudo systemctl status rke2-server
+
+# Check RKE2 agent status
+sudo systemctl status rke2-agent
+
+# View server logs
+sudo journalctl -u rke2-server -f
+
+# View agent logs
+sudo journalctl -u rke2-agent -f
+
+# Restart RKE2 server
+sudo systemctl restart rke2-server
+
+# Restart RKE2 agent
+sudo systemctl restart rke2-agent
+
+# Check Cilium connectivity
+kubectl exec -n kube-system <cilium-pod> -- cilium status
+
+# Describe problematic pod
+kubectl describe pod <pod-name> -n <namespace>
+```
+
+### 9.3 Log Locations
+
+| Component | Log Location |
+|-----------|--------------|
+| RKE2 Server | `/var/log/syslog` or `journalctl -u rke2-server` |
+| RKE2 Agent | `/var/log/syslog` or `journalctl -u rke2-agent` |
+| Kubelet | `/var/lib/rancher/rke2/agent/logs/kubelet.log` |
+| Containerd | `/var/lib/rancher/rke2/agent/containerd/containerd.log` |
+| Pods | `kubectl logs <pod-name> -n <namespace>` |
+
+### 9.4 Complete Cluster Reset
+
+If you need to start over:
+
+```yaml
+# reset-cluster.yaml
+- name: Reset RKE2 cluster
+  hosts: all
+  become: true
+  tasks:
+    - name: Stop RKE2 services
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - rke2-server
+        - rke2-agent
+      ignore_errors: yes
+
+    - name: Run RKE2 uninstall script
+      ansible.builtin.shell: |
+        /usr/local/bin/rke2-uninstall.sh || true
+        /usr/local/bin/rke2-agent-uninstall.sh || true
+      ignore_errors: yes
+
+    - name: Remove RKE2 directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/rancher/rke2
+        - /var/lib/rancher/rke2
+        - /var/lib/kubelet
+        - /run/k3s
+```
+
+---
+
+## 10. Project Structure
+
+```
+k8s-rke2/
+├── README.md
+├── ansible.cfg
+├── install-playbook.yaml          # Main installation playbook
+├── inventory/
+│   ├── rke2-cluster.yaml          # Inventory file
+│   └── group_vars/
+│       └── kubernetes.yaml        # Cluster variables
+├── tasks/
+│   ├── dns-resolver-configuration.yaml
+│   ├── rke2-pre-request.yaml
+│   └── system-update.yaml
+└── templates/
+    ├── rke2-server-config.yaml.j2
+    ├── rke2-agent-config.yaml.j2
+    └── rke2-cilium-config.yaml.j2
+```
+
+---
+
+## 11. Quick Start Guide
+
+### Step 1: Configure Inventory
+
+Edit `inventory/rke2-cluster.yaml`:
+```yaml
+all:
+  children:
+    masters:
+      hosts:
+        rke2-node0:
+          ansible_host: 44.31.84.35
+        rke2-node1:
+          ansible_host: 44.31.84.36
+        rke2-node2:
+          ansible_host: 44.31.84.37
+    workers:
+      hosts:
+        rke2-node3:
+          ansible_host: 44.31.84.38
+        rke2-node4:
+          ansible_host: 44.31.84.39
+        rke2-node5:
+          ansible_host: 44.31.84.40
+```
+
+### Step 2: Configure Variables
+
+Edit `inventory/group_vars/kubernetes.yaml`:
+```yaml
+---
+load_balancer_dns: "rke2.as208529.net.eu.org"
+load_balancer_port: "6443"
+pod_cidr: "192.168.0.0/16,fd00:5678::/64"
+service_cidr: "10.96.0.0/12,fd00:1234::/108"
+```
+
+### Step 3: Run Installation
+
+```bash
+# Full installation (system prep + RKE2 + Cilium)
+ansible-playbook -i inventory/rke2-cluster.yaml install-playbook.yaml
+
+# Or run specific tags
+ansible-playbook -i inventory/rke2-cluster.yaml install-playbook.yaml --tags prepare-system
+ansible-playbook -i inventory/rke2-cluster.yaml install-playbook.yaml --tags install-rke2
+```
+
+### Step 4: Verify Installation
+
+```bash
+ansible-playbook -i inventory/rke2-cluster.yaml check-cluster.yaml
+```
+
+### Step 5: Access Cluster
+
+```bash
+# Copy kubeconfig from master
+scp ubuntu@44.31.84.35:/etc/rancher/rke2/rke2.yaml ~/.kube/config
+
+# Update server address
+sed -i 's/127.0.0.1/rke2.as208529.net.eu.org/g' ~/.kube/config
+
+# Test access
+kubectl get nodes
+```
+
+---
+
+## 12. Best Practices
+
+### Security
+
+1. **SSH Keys**: Use key-based authentication, disable password auth
+2. **Firewall**: Restrict ports to known IPs only
+3. **RBAC**: Configure proper role-based access control
+4. **Network Policies**: Use Cilium network policies for pod-to-pod security
+5. **Secrets Management**: Use external secret management (Vault, Sealed Secrets)
+
+### High Availability
+
+1. **Odd Number of Masters**: Always use 3, 5, or 7 control-plane nodes
+2. **Etcd Backup**: Regular etcd snapshots
+3. **Load Balancer**: Use a proper load balancer for production
+4. **Node Distribution**: Spread nodes across availability zones
+
+### Monitoring
+
+1. **Prometheus**: Install for metrics collection
+2. **Grafana**: Visualize cluster metrics
+3. **Hubble UI**: Monitor network flows
+4. **Log Aggregation**: Centralize logs (ELK, Loki)
+
+### Maintenance
+
+1. **Updates**: Regular RKE2 and OS updates
+2. **Backups**: Automated etcd backups
+3. **Documentation**: Keep runbooks updated
+4. **Testing**: Test upgrades in staging first
+
+---
+
+## 13. References
+
+- [RKE2 Official Documentation](https://docs.rke2.io/)
+- [Cilium Documentation](https://docs.cilium.io/)
+- [Kubernetes Official Docs](https://kubernetes.io/docs/)
+- [Ansible Documentation](https://docs.ansible.com/)
+- [RKE2 Networking Options](https://docs.rke2.io/networking/basic_network_options)
+
+---
+
+## 14. License
+
+This project is provided as-is for educational and demonstration purposes.
+
+---
+
+## 15. Author
+
+**Project**: RKE2 Kubernetes Cluster Automation  
+**Date**: November 2025  
+**Description**: Production-ready Kubernetes deployment with Ansible and Cilium CNI
+

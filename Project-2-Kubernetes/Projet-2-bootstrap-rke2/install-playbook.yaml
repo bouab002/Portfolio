@@ -1,0 +1,20 @@
+---
+- name: prepare system
+  hosts: all
+  become: true
+
+  tasks:
+     # DNS resolve config
+    - name: Include DNS resolve tasks
+      include_tasks: "tasks/dns-resolver-configuration.yaml"
+
+    # IP forwarding config
+    - name: update system
+      include_tasks: "tasks/system-update.yaml"
+
+    # prepare system for rke2
+    - name: prepare system for rke2
+      include_tasks: "tasks/rke2-pre-request.yaml"
+
+  tags: 
+  - prepare-system

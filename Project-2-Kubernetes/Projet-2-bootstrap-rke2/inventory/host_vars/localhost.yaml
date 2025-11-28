@@ -1,0 +1,4 @@
+---
+# Kubernetes variables
+# Where to store kubeadm-config.yaml
+kubeconfig_file: "/tmp/kubeconfig-localhost.yaml"

@@ -1,0 +1,17 @@
+---
+# Kubernetes variables
+# Kubernetes version
+kubernetes_version: v1.32
+# Where to store kubeadm-config.yaml
+kubeconfig_file: "/tmp/kubeconfig.yaml"
+# First master node IP
+master_node_ip: "44.31.84.33"
+# Load balancer DNS
+load_balancer_dns: "k8s.as208529.net.eu.org"
+# Load balancer port
+load_balancer_port: "6443"
+# Service CIDR
+service_cidr: "10.96.0.0/12,fd00:1234::/108"
+# Pod CIDR
+pod_cidr: "192.168.0.0/16,fd00:5678::/64"
+
