@@ -9,4 +9,5 @@ Experienced in building and managing scalable, secure, and reliable Kubernetes p
 ## Project 2- Kubernetes
 * [1.Install and bootstrap a hig availability Kubernetes cluster with Ansible](Project-2-Kubernetes/2.1-Install-and-bootstrap-a-hight-availability-kubernetes-cluster-with-ansibme.md)
 * [2.Kubernetes Security: From a Pod to a Node: The Privileged Escalation Trap](Project-2-Kubernetes/2.2-kubernetes-security-understanding-priviliged.md)
-* [3. Install high availability cluster RKE2 using ansible](Project-2-Kubernetes/2.3-install-rke2-using-ansible.md)
+* [3.Install high availability cluster RKE2 using ansible](Project-2-Kubernetes/2.3-install-rke2-using-ansible.md)
+* [4.Cilium troubleshooting](Project-2-Kubernetes/2.4-Cilium-trable-troubleshooting.md)
